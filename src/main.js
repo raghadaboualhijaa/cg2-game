@@ -105,7 +105,7 @@ scene.add(player);
 
 let playerAngle = 0;      
 let playerRadius = 8;     
-const minRadius = 3.5;               
+const minRadius = 4.0;               
 const maxRadius = floorRadius - 1.2; 
 
 let playerY = 0.6;         
@@ -113,7 +113,7 @@ let velocityY = 0;
 const gravity = -0.015;    
 let isJumping = false;     
 
-// متغيرات الشلف والارتداد الفيزيائي عند الاصطدام
+// متغيرات الارتداد عند الاصطدام
 let knockbackAngleVelocity = 0;
 let knockbackRadiusVelocity = 0;
 
@@ -138,7 +138,7 @@ window.addEventListener('keyup', (e) => {
 
 const maxGems = 8;
 let gemsCollected = 0;
-const activeGems = [];
+let activeGems = [];
 const activeObstacles = [];
 
 const gemGeo = new THREE.OctahedronGeometry(0.4);
@@ -150,8 +150,8 @@ const obstacleMat = new THREE.MeshStandardMaterial({ color: 0xff4444, roughness:
 function spawnElements() {
     for (let i = 0; i < maxGems; i++) {
         const gem = new THREE.Mesh(gemGeo, gemMat);
-        const angle = (i / maxGems) * Math.PI * 2 + Math.random() * 0.5;
-        const r = minRadius + Math.random() * (maxRadius - minRadius);
+        const angle = (i / maxGems) * Math.PI * 2; 
+        const r = minRadius + 1.0 + (i % 3) * 2.0; 
         
         gem.position.set(Math.cos(angle) * r, 0.8, Math.sin(angle) * r);
         gem.castShadow = true;
@@ -161,8 +161,8 @@ function spawnElements() {
 
     for (let i = 0; i < 5; i++) {
         const obs = new THREE.Mesh(obstacleGeo, obstacleMat);
-        const angle = (i / 5) * Math.PI * 2 + 0.3;
-        const r = minRadius + Math.random() * (maxRadius - minRadius);
+        const angle = (i / 5) * Math.PI * 2 + 0.4;
+        const r = minRadius + 1.5 + (i % 2) * 2.5;
         
         obs.position.set(Math.cos(angle) * r, 0.6, Math.sin(angle) * r);
         obs.castShadow = true;
@@ -209,7 +209,6 @@ const tempBox = new THREE.Box3();
 
 let lastLaserHitTime = 0; 
 
-// متجهات حساب تصادم الليزر
 const laserStart = new THREE.Vector3();
 const laserEnd = new THREE.Vector3();
 const playerPos = new THREE.Vector3();
@@ -217,7 +216,7 @@ const closestPointOnLaser = new THREE.Vector3();
 const laserLine = new THREE.Line3();
 
 // =========================================================================
-// 8. حلقة الأنيميشن والتصادمات المتقدمة
+// 8. حلقة الأنيميشن والتصادمات
 // =========================================================================
 
 function animate() {
@@ -227,7 +226,6 @@ function animate() {
     const angularSpeed = 0.03; 
     const radialSpeed = 0.15;  
 
-    // تطبيق حركة اللاعب بواسطة المفاتيح فقط إذا لم يكن تحت تأثير قوة الشلف القوية
     if (Math.abs(knockbackAngleVelocity) < 0.01 && Math.abs(knockbackRadiusVelocity) < 0.05) {
         if (keys['arrowleft'] || keys['a']) playerAngle += angularSpeed; 
         if (keys['arrowright'] || keys['d']) playerAngle -= angularSpeed; 
@@ -235,14 +233,11 @@ function animate() {
         if (keys['arrowdown'] || keys['s']) playerRadius = Math.min(maxRadius, playerRadius + radialSpeed); 
     }
 
-    // 💥 تطبيق الفيزياء وقوة الارتداد (الشلف)
     playerAngle += knockbackAngleVelocity;
     playerRadius += knockbackRadiusVelocity;
 
-    // حصر نصف القطر ضمن حدود الحلبة
     playerRadius = THREE.MathUtils.clamp(playerRadius, minRadius, maxRadius);
 
-    // خمود قوة الارتداد تدريجياً لتعود السيطرة للاعب
     knockbackAngleVelocity *= 0.85;
     knockbackRadiusVelocity *= 0.85;
 
@@ -272,53 +267,50 @@ function animate() {
 
     laserGroup.rotation.y -= 0.02; 
 
-    playerBox.setFromObject(player); 
-
-    // 1️⃣ التقاط الجواهر
-    for (let i = activeGems.length - 1; i >= 0; i--) {
+    // 1️⃣ التقاط الجواهر بنظام التصفية الآمنة (Safe Filter Process)
+    const gemsToKeep = [];
+    for (let i = 0; i < activeGems.length; i++) {
         const gem = activeGems[i];
         gem.rotation.y += 0.03; 
-        tempBox.setFromObject(gem);
 
-        if (playerBox.intersectsBox(tempBox)) {
-            scene.remove(gem);
-            gem.geometry.dispose(); 
-            activeGems.splice(i, 1);
+        const distToGem = player.position.distanceTo(gem.position);
+
+        if (distToGem < 0.85) { 
+            scene.remove(gem); // إزالة الجوهر المخفي من المشهد فقط
             gemsCollected++;
 
             if (gemsCollected === maxGems) endGame('win');
+        } else {
+            gemsToKeep.push(gem); // الاحتفاظ بالجواهر البعيدة فقط
         }
     }
+    activeGems = gemsToKeep; // تحديث قائمة الجواهر النشطة دون التأثير على الحلقة
 
-    // 2️⃣ الاصطدام بالمربعات الحمراء (حساب المتجه للشلف الفيزيائي القوي)
+    // 2️⃣ الاصطدام بالمربعات الحمراء
     const now = Date.now();
+    playerBox.setFromObject(player);
     for (let obsObj of activeObstacles) {
         tempBox.setFromObject(obsObj.mesh);
         if (playerBox.intersectsBox(tempBox)) {
             if (now - obsObj.hitCooldown > 600) { 
                 obsObj.hitCooldown = now;
                 
-                // خصم 3 ثوانٍ من الوقت
                 timeLeft = Math.max(0, timeLeft - 3); 
                 
-                // حساب اتجاه الشلف بعيداً عن موقع المكعب بالظبط
                 const obsPos = obsObj.mesh.position;
                 const obsAngle = Math.atan2(obsPos.z, obsPos.x);
                 const obsRadius = Math.sqrt(obsPos.x * obsPos.x + obsPos.z * obsPos.z);
 
-                // دفع الزاوية بعيداً عن مركز المكعب
                 let angleDiff = playerAngle - obsAngle;
-                // ضبط الزاوية بين -PI و PI
                 angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
 
                 const pushDirection = angleDiff >= 0 ? 1 : -1;
-                knockbackAngleVelocity = pushDirection * 0.12; // سرعة دوران عالية للشلف
+                knockbackAngleVelocity = pushDirection * 0.12; 
 
-                // دفع نصف القطر للخارج أو للداخل حسب موقع الكرة بالنسبة للمكعب
                 if (playerRadius >= obsRadius) {
-                    knockbackRadiusVelocity = 0.6; // دفع للخارج
+                    knockbackRadiusVelocity = 0.6; 
                 } else {
-                    knockbackRadiusVelocity = -0.6; // دفع للداخل
+                    knockbackRadiusVelocity = -0.6; 
                 }
                 
                 if (timeLeft <= 0) {
@@ -342,7 +334,7 @@ function animate() {
         lastLaserHitTime = now;
         laserHits++;
         
-        knockbackRadiusVelocity = 0.8; // دفع للخارج عند ضرب الليزر
+        knockbackRadiusVelocity = 0.8; 
 
         if (laserHits >= maxLaserHits) {
             endGame('laser'); 
