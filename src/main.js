@@ -17,7 +17,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 // =========================================================================
-// 2. إنشاء الخامات المتقدمة (Texture Generation & Mapping)
+// 2. إنشاء خامة الأرضية (Grid Texture)
 // =========================================================================
 
 function createGridTexture() {
@@ -44,7 +44,7 @@ floorTexture.wrapT = THREE.RepeatWrapping;
 floorTexture.repeat.set(8, 8);             
 
 // =========================================================================
-// 3. الإضاءة والظلال (Lighting and Shadow Mapping)
+// 3. الإضاءة والظلال
 // =========================================================================
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -58,7 +58,7 @@ dirLight.shadow.mapSize.height = 2048;
 scene.add(dirLight);
 
 // =========================================================================
-// 4. عناصر المشهد الأساسية (Floor, Tower, Laser Arm, Player)
+// 4. بناء المجسمات الأساسية
 // =========================================================================
 
 const floorRadius = 14; 
@@ -78,9 +78,9 @@ tower.castShadow = true;
 tower.receiveShadow = true; 
 scene.add(tower);
 
-// 🔴 حاوية شعاع الليزر (Laser Group): تبدأ من مركز البرج وتمتد للخارج فقط مثل عقرب الساعة
+// حاوية شعاع الليزر
 const laserGroup = new THREE.Group();
-laserGroup.position.set(0, 0.6, 0);
+laserGroup.position.set(0, 0.6, 0); 
 scene.add(laserGroup);
 
 const laserLength = floorRadius - 1;
@@ -88,9 +88,8 @@ const laserArmGeo = new THREE.CylinderGeometry(0.12, 0.12, laserLength);
 const laserArmMat = new THREE.MeshBasicMaterial({ color: 0xff0055 }); 
 const laserArm = new THREE.Mesh(laserArmGeo, laserArmMat);
 
-// تدوير ذراع الليزر وضبط محورها لتبدأ من المركز وتتجه نحو الإمام
 laserArm.rotation.z = Math.PI / 2;
-laserArm.position.x = laserLength / 2; // إزاحة المركز لتنطلق من البرج للخارج فقط
+laserArm.position.x = laserLength / 2; 
 laserGroup.add(laserArm);
 
 // مجسم اللاعب
@@ -101,18 +100,22 @@ player.castShadow = true;
 scene.add(player);
 
 // =========================================================================
-// 5. نظام التحكم المداري وفيزياء القفز
+// 5. الحركة والتحكم
 // =========================================================================
 
 let playerAngle = 0;      
 let playerRadius = 8;     
-const minRadius = 3.5;            
+const minRadius = 3.5;               
 const maxRadius = floorRadius - 1.2; 
 
 let playerY = 0.6;         
 let velocityY = 0;         
 const gravity = -0.015;    
 let isJumping = false;     
+
+// متغيرات الشلف والارتداد الفيزيائي عند الاصطدام
+let knockbackAngleVelocity = 0;
+let knockbackRadiusVelocity = 0;
 
 const keys = {};
 window.addEventListener('keydown', (e) => { 
@@ -130,7 +133,7 @@ window.addEventListener('keyup', (e) => {
 });
 
 // =========================================================================
-// 6. العوائق الأرضية والجواهر
+// 6. توليد العناصر
 // =========================================================================
 
 const maxGems = 8;
@@ -165,13 +168,13 @@ function spawnElements() {
         obs.castShadow = true;
         obs.receiveShadow = true;
         scene.add(obs);
-        activeObstacles.push(obs);
+        activeObstacles.push({ mesh: obs, hitCooldown: 0 });
     }
 }
 spawnElements();
 
 // =========================================================================
-// 7. إدارة الوقت والتصادم (Perfect Collision)
+// 7. إدارة الوقت والنهاية
 // =========================================================================
 
 let timeLeft = 40;       
@@ -183,6 +186,7 @@ const timerInterval = setInterval(() => {
     if (isGameOver) return;
     timeLeft--;
     if (timeLeft <= 0) {
+        timeLeft = 0;
         endGame('timeout'); 
     }
 }, 1000);
@@ -202,27 +206,46 @@ function endGame(reason) {
 
 const playerBox = new THREE.Box3();
 const tempBox = new THREE.Box3();
-const laserBox = new THREE.Box3();
 
-let lastHitTime = 0; 
+let lastLaserHitTime = 0; 
+
+// متجهات حساب تصادم الليزر
+const laserStart = new THREE.Vector3();
+const laserEnd = new THREE.Vector3();
+const playerPos = new THREE.Vector3();
+const closestPointOnLaser = new THREE.Vector3();
+const laserLine = new THREE.Line3();
+
+// =========================================================================
+// 8. حلقة الأنيميشن والتصادمات المتقدمة
+// =========================================================================
 
 function animate() {
     if (isGameOver) return;
     requestAnimationFrame(animate); 
 
-    // أ) الحركة المدارية
-    const angularSpeed = 0.03;
-    const radialSpeed = 0.15;
+    const angularSpeed = 0.03; 
+    const radialSpeed = 0.15;  
 
-    if (keys['arrowleft'] || keys['a']) playerAngle += angularSpeed;  
-    if (keys['arrowright'] || keys['d']) playerAngle -= angularSpeed; 
-    if (keys['arrowup'] || keys['w']) playerRadius = Math.max(minRadius, playerRadius - radialSpeed); 
-    if (keys['arrowdown'] || keys['s']) playerRadius = Math.min(maxRadius, playerRadius + radialSpeed); 
+    // تطبيق حركة اللاعب بواسطة المفاتيح فقط إذا لم يكن تحت تأثير قوة الشلف القوية
+    if (Math.abs(knockbackAngleVelocity) < 0.01 && Math.abs(knockbackRadiusVelocity) < 0.05) {
+        if (keys['arrowleft'] || keys['a']) playerAngle += angularSpeed; 
+        if (keys['arrowright'] || keys['d']) playerAngle -= angularSpeed; 
+        if (keys['arrowup'] || keys['w']) playerRadius = Math.max(minRadius, playerRadius - radialSpeed); 
+        if (keys['arrowdown'] || keys['s']) playerRadius = Math.min(maxRadius, playerRadius + radialSpeed); 
+    }
 
-    const targetX = Math.cos(playerAngle) * playerRadius;
-    const targetZ = Math.sin(playerAngle) * playerRadius;
+    // 💥 تطبيق الفيزياء وقوة الارتداد (الشلف)
+    playerAngle += knockbackAngleVelocity;
+    playerRadius += knockbackRadiusVelocity;
 
-    // القفز والجاذبية
+    // حصر نصف القطر ضمن حدود الحلبة
+    playerRadius = THREE.MathUtils.clamp(playerRadius, minRadius, maxRadius);
+
+    // خمود قوة الارتداد تدريجياً لتعود السيطرة للاعب
+    knockbackAngleVelocity *= 0.85;
+    knockbackRadiusVelocity *= 0.85;
+
     playerY += velocityY;
     velocityY += gravity; 
     if (playerY <= 0.6) { 
@@ -231,9 +254,12 @@ function animate() {
         velocityY = 0;
     }
 
-    player.position.set(targetX, playerY, targetZ);
+    player.position.set(
+        Math.cos(playerAngle) * playerRadius,
+        playerY,
+        Math.sin(playerAngle) * playerRadius
+    );
 
-    // ب) الكاميرا الناعمة
     const camDistance = 5;
     const camHeight = 3;
     const targetCamX = Math.cos(playerAngle) * (playerRadius + camDistance);
@@ -244,13 +270,11 @@ function animate() {
     camera.position.y = THREE.MathUtils.lerp(camera.position.y, playerY + camHeight, 0.08);
     camera.lookAt(player.position); 
 
-    // ج) دوران الليزر
-    laserGroup.rotation.y -= 0.02; // دوران شعاع الليزر
+    laserGroup.rotation.y -= 0.02; 
 
-    // د) كشف الاصطدامات
     playerBox.setFromObject(player); 
 
-    // 1. التقاط الجواهر
+    // 1️⃣ التقاط الجواهر
     for (let i = activeGems.length - 1; i >= 0; i--) {
         const gem = activeGems[i];
         gem.rotation.y += 0.03; 
@@ -266,34 +290,68 @@ function animate() {
         }
     }
 
-    // 2. الاصطدام بالعوائق الأرضية
-    for (let obs of activeObstacles) {
-        tempBox.setFromObject(obs);
+    // 2️⃣ الاصطدام بالمربعات الحمراء (حساب المتجه للشلف الفيزيائي القوي)
+    const now = Date.now();
+    for (let obsObj of activeObstacles) {
+        tempBox.setFromObject(obsObj.mesh);
         if (playerBox.intersectsBox(tempBox)) {
-            playerRadius = Math.min(maxRadius, playerRadius + 0.3);
+            if (now - obsObj.hitCooldown > 600) { 
+                obsObj.hitCooldown = now;
+                
+                // خصم 3 ثوانٍ من الوقت
+                timeLeft = Math.max(0, timeLeft - 3); 
+                
+                // حساب اتجاه الشلف بعيداً عن موقع المكعب بالظبط
+                const obsPos = obsObj.mesh.position;
+                const obsAngle = Math.atan2(obsPos.z, obsPos.x);
+                const obsRadius = Math.sqrt(obsPos.x * obsPos.x + obsPos.z * obsPos.z);
+
+                // دفع الزاوية بعيداً عن مركز المكعب
+                let angleDiff = playerAngle - obsAngle;
+                // ضبط الزاوية بين -PI و PI
+                angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+
+                const pushDirection = angleDiff >= 0 ? 1 : -1;
+                knockbackAngleVelocity = pushDirection * 0.12; // سرعة دوران عالية للشلف
+
+                // دفع نصف القطر للخارج أو للداخل حسب موقع الكرة بالنسبة للمكعب
+                if (playerRadius >= obsRadius) {
+                    knockbackRadiusVelocity = 0.6; // دفع للخارج
+                } else {
+                    knockbackRadiusVelocity = -0.6; // دفع للداخل
+                }
+                
+                if (timeLeft <= 0) {
+                    endGame('timeout');
+                }
+            }
         }
     }
 
-    // 3. الاصطدام بليزر (AABB المباشر والمحدد على شعاع الليزر الأحمر فقط)
-    laserBox.setFromObject(laserArm);
-    const now = Date.now();
+    // 3️⃣ حساب تصادم الليزر
+    laserStart.set(0, 0.6, 0);
+    laserEnd.set(laserLength, 0.6, 0).applyMatrix4(laserGroup.matrixWorld);
+    laserLine.set(laserStart, laserEnd);
 
-    // يضرب فقط إذا تقاطع مجسم الكرة مع مجسم الليزر وكانت الكرة متواجدة على الارتفاع المنخفض (playerY < 1.1)
-    if (playerBox.intersectsBox(laserBox) && playerY < 1.1 && (now - lastHitTime > 1800)) {
-        lastHitTime = now;
+    playerPos.copy(player.position);
+    laserLine.closestPointToPoint(playerPos, true, closestPointOnLaser);
+
+    const distanceToLaser = playerPos.distanceTo(closestPointOnLaser);
+
+    if (distanceToLaser < 0.65 && playerY < 1.1 && (now - lastLaserHitTime > 1500)) {
+        lastLaserHitTime = now;
         laserHits++;
         
-        playerRadius = Math.min(maxRadius, playerRadius + 1.5); // دفع اللاعب للبعيد عند ضربه
+        knockbackRadiusVelocity = 0.8; // دفع للخارج عند ضرب الليزر
 
         if (laserHits >= maxLaserHits) {
             endGame('laser'); 
-        } else {
-            console.log(`⚠️ Warning: Laser hit! Lives remaining: ${maxLaserHits - laserHits}`);
         }
     }
 
     renderer.render(scene, camera);
 }
 
-alert(`🎯 Goal: Collect 8 gems in 40 seconds!\n⚠️ Warning: If the laser hits you 4 times, you lose!\n- A/D or Arrows: Orbit around\n- W/S: Move closer/further\n- Space: Jump over the laser`);
+alert(`🎯 Goal: Collect 8 gems in 40 seconds!\n⚠️ Obstacles (Red Cubes): Knocks you back & subtracts 3 seconds!\n⚠️ Laser: Hits 4 times = Game Over!\n- A/D or Arrows: Orbit around\n- W/S: Move closer/further\n- Space: Jump over the laser`);
+
 animate();
