@@ -4110,4 +4110,4 @@ void main() {
 ⚠️ Laser: Hits 4 times = Game Over!
 - A/D or Arrows: Orbit around
 - W/S: Move closer/further
-- Space: Jump over the laser`),Gl(),window.addEventListener(`resize`,()=>{$c.aspect=window.innerWidth/window.innerHeight,$c.updateProjectionMatrix(),el.setSize(window.innerWidth,window.innerHeight)});
+- Space: Jump over the laser`),Gl();
