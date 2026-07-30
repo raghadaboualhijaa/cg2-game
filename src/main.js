@@ -412,17 +412,3 @@ alert(`🎯 Goal: Collect 8 gems in 40 seconds!\n⚠️ Obstacles (Red Cubes): K
 
 // بدء الحلقة التكرارية للعبة
 animate();
-// =========================================================================
-// التجاوب مع تغير حجم الشاشة (Window Resize Event Listener)
-// =========================================================================
-
-window.addEventListener('resize', () => {
-    // 1. تحديث نسبة العرض إلى الارتفاع للكاميرا (Aspect Ratio)
-    camera.aspect = window.innerWidth / window.innerHeight;
-    
-    // 2. تطبيق التعديل على مصفوفة الإسقاط الخاصة بالكاميرا
-    camera.updateProjectionMatrix();
-    
-    // 3. إعادة ضبط حجم جهاز العرض (Renderer) ليطابق الأبعاد الجديدة
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
